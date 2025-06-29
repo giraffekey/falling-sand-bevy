@@ -21,7 +21,7 @@ const TICK_RATE: f32 = 0.01;
 
 const BRUSH_SIZES: [isize; 4] = [0, 2, 4, 8];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Material {
     Powder,
     Solid,
@@ -269,6 +269,21 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         continue;
                     }
 
+                    // Extinguish fire
+                    match grid.tiles[x][y + 1] {
+                        Some(id)
+                            if id.tile().material == Material::Fire
+                                && tile.falls()
+                                && !tile.flammable =>
+                        {
+                            new_tiles[x][y] = None;
+                            new_tiles[x][y + 1] = grid.tiles[x][y];
+                            grid.lifespans.remove(&(x, y + 1));
+                            continue;
+                        }
+                        _ => (),
+                    }
+
                     // Slide down slopes
                     if tile.slides() {
                         let below_left = x > 0
@@ -365,6 +380,8 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             }
                         }
                         Material::Gas => {
+                            // Disperse
+
                             let dx = rng.gen_range(-1..=1);
                             let dy = rng.gen_range(-1..=1);
 
@@ -382,7 +399,9 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             }
                         }
                         Material::Fire => {
-                            let mut spreads: Vec<_> = neighbors(x, y)
+                            // Spread flames
+
+                            let mut spreads: Vec<_> = adjacent(x, y)
                                 .into_iter()
                                 .filter(|&(nx, ny)| {
                                     grid.tiles[nx][ny].is_some()
@@ -408,7 +427,12 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 }
                             }
 
-                            if y > 0 && grid.tiles[x][y - 1].is_none() {
+                            // Rise
+
+                            if y > 0
+                                && grid.tiles[x][y - 1].is_none()
+                                && new_tiles[x][y - 1].is_none()
+                            {
                                 new_tiles[x][y] = None;
                                 new_tiles[x][y - 1] = grid.tiles[x][y];
 
@@ -616,6 +640,23 @@ fn tiles_to_world(x: usize, y: usize) -> Vec2 {
         x as f32 * TILE_SIZE - GRID_WIDTH as f32 * TILE_SIZE / 2.0 + TILE_SIZE / 2.0,
         -(y as f32 * TILE_SIZE - GRID_HEIGHT as f32 * TILE_SIZE / 2.0 + TILE_SIZE / 2.0),
     )
+}
+
+fn adjacent(x: usize, y: usize) -> Vec<(usize, usize)> {
+    let mut ids = Vec::new();
+    if x > 0 {
+        ids.push((x - 1, y));
+    }
+    if x < GRID_WIDTH - 1 {
+        ids.push((x + 1, y));
+    }
+    if y > 0 {
+        ids.push((x, y - 1));
+    }
+    if y < GRID_HEIGHT - 1 {
+        ids.push((x, y + 1));
+    }
+    ids
 }
 
 fn neighbors(x: usize, y: usize) -> Vec<(usize, usize)> {
