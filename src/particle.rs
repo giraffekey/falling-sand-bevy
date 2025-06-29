@@ -46,15 +46,25 @@ impl Tile {
         }
     }
 
-    pub fn sinks_under(&self, other: Tile) -> bool {
-        match (self.material, other.material) {
-            (Material::Powder, Material::Liquid(_)) => true,
-            (Material::Solid, Material::Liquid(_)) => true,
-            (Material::Liquid(a), Material::Liquid(b)) => a > b,
-            (Material::Powder, Material::Gas) => true,
-            (Material::Solid, Material::Gas) => true,
-            (Material::Liquid(_), Material::Gas) => true,
-            _ => false,
+    pub fn slides(&self) -> bool {
+        match self.material {
+            Material::Powder | Material::Liquid(_) => true,
+            Material::Solid | Material::Gas | Material::Fire | Material::Wind => false,
+        }
+    }
+
+    pub fn sinks_under(&self, other: Option<TileId>) -> bool {
+        match other {
+            Some(other) => match (self.material, other.tile().material) {
+                (Material::Powder, Material::Liquid(_)) => true,
+                (Material::Solid, Material::Liquid(_)) => true,
+                (Material::Liquid(a), Material::Liquid(b)) => a > b,
+                (Material::Powder, Material::Gas) => true,
+                (Material::Solid, Material::Gas) => true,
+                (Material::Liquid(_), Material::Gas) => true,
+                _ => false,
+            },
+            None => true,
         }
     }
 }
@@ -224,116 +234,76 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
             .collect();
         coords.shuffle(&mut rng);
 
+        let mut count = 0;
         for (x, y) in coords {
             if let Some(tile_id) = grid.tiles[x][y] {
                 let tile = tile_id.tile();
+                count += 1;
 
                 if y > 0 {
                     let above = grid.tiles[x][y - 1];
 
                     // Float
-                    if above.is_some() && above.unwrap().tile().sinks_under(tile) {
-                        new_tiles[x][y] = grid.tiles[x][y - 1];
+                    if above.is_some() && above.unwrap().tile().sinks_under(Some(tile_id)) {
+                        new_tiles[x][y] = above;
                         new_tiles[x][y - 1] = grid.tiles[x][y];
                         continue;
                     }
                 }
 
                 if y < GRID_HEIGHT - 1 {
-                    let below = grid.tiles[x][y + 1];
-
                     // Fall
-                    if below.is_none() && tile.falls() {
-                        new_tiles[x][y] = None;
-                        new_tiles[x][y + 1] = grid.tiles[x][y];
-                        continue;
-                    }
-
-                    // Sink
-                    if below.is_some() && tile.sinks_under(below.unwrap().tile()) {
+                    if tile.falls() && tile.sinks_under(grid.tiles[x][y + 1]) {
                         new_tiles[x][y] = grid.tiles[x][y + 1];
                         new_tiles[x][y + 1] = grid.tiles[x][y];
                         continue;
                     }
 
-                    match tile.material {
-                        Material::Powder => {
-                            // Slide down slopes
+                    // Slide down slopes
+                    if tile.slides() {
+                        let below_left = x > 0
+                            && tile.sinks_under(grid.tiles[x - 1][y + 1])
+                            && tile.sinks_under(grid.tiles[x - 1][y])
+                            && grid.tiles[x - 1][y + 1] == new_tiles[x - 1][y + 1];
+                        let below_right = x < GRID_WIDTH - 1
+                            && tile.sinks_under(grid.tiles[x + 1][y + 1])
+                            && tile.sinks_under(grid.tiles[x + 1][y])
+                            && grid.tiles[x + 1][y + 1] == new_tiles[x + 1][y + 1];
 
-                            let below_left = x > 0
-                                && grid.tiles[x - 1][y + 1].is_none()
-                                && grid.tiles[x - 1][y].is_none()
-                                && new_tiles[x - 1][y + 1].is_none();
-                            let below_right = x < GRID_WIDTH - 1
-                                && grid.tiles[x + 1][y + 1].is_none()
-                                && grid.tiles[x + 1][y].is_none()
-                                && new_tiles[x + 1][y + 1].is_none();
-
-                            let (below_left, below_right) = if below_left && below_right {
-                                if rng.gen() {
-                                    (true, false)
-                                } else {
-                                    (false, true)
-                                }
+                        let (below_left, below_right) = if below_left && below_right {
+                            if rng.gen() {
+                                (true, false)
                             } else {
-                                (below_left, below_right)
-                            };
-
-                            if below_left {
-                                new_tiles[x][y] = None;
-                                new_tiles[x - 1][y + 1] = grid.tiles[x][y];
-                                continue;
+                                (false, true)
                             }
+                        } else {
+                            (below_left, below_right)
+                        };
 
-                            if below_right {
-                                new_tiles[x][y] = None;
-                                new_tiles[x + 1][y + 1] = grid.tiles[x][y];
-                                continue;
-                            }
+                        if below_left {
+                            new_tiles[x][y] = grid.tiles[x - 1][y + 1];
+                            new_tiles[x - 1][y + 1] = grid.tiles[x][y];
+                            continue;
                         }
-                        Material::Solid => (),
+
+                        if below_right {
+                            new_tiles[x][y] = grid.tiles[x + 1][y + 1];
+                            new_tiles[x + 1][y + 1] = grid.tiles[x][y];
+                            continue;
+                        }
+                    }
+
+                    match tile.material {
+                        Material::Powder | Material::Solid => (),
                         Material::Liquid(_) => {
-                            // Slide down slopes
-
-                            let below_left = x > 0
-                                && grid.tiles[x - 1][y + 1].is_none()
-                                && grid.tiles[x - 1][y].is_none()
-                                && new_tiles[x - 1][y + 1].is_none();
-                            let below_right = x < GRID_WIDTH - 1
-                                && grid.tiles[x + 1][y + 1].is_none()
-                                && grid.tiles[x + 1][y].is_none()
-                                && new_tiles[x + 1][y + 1].is_none();
-
-                            let (below_left, below_right) = if below_left && below_right {
-                                if rng.gen() {
-                                    (true, false)
-                                } else {
-                                    (false, true)
-                                }
-                            } else {
-                                (below_left, below_right)
-                            };
-
-                            if below_left {
-                                new_tiles[x][y] = None;
-                                new_tiles[x - 1][y + 1] = grid.tiles[x][y];
-                                continue;
-                            }
-
-                            if below_right {
-                                new_tiles[x][y] = None;
-                                new_tiles[x + 1][y + 1] = grid.tiles[x][y];
-                                continue;
-                            }
-
                             // Fill gaps
 
                             let left = x > 0
-                                && new_tiles[x - 1][y].is_none()
-                                && (y == 0 || grid.tiles[x - 1][y - 1].is_none());
+                                && tile.sinks_under(new_tiles[x - 1][y])
+                                && (y == 0 || tile.sinks_under(grid.tiles[x - 1][y - 1]));
                             let right = x < GRID_WIDTH - 1
-                                && new_tiles[x + 1][y].is_none()
-                                && (y == 0 || grid.tiles[x + 1][y - 1].is_none());
+                                && tile.sinks_under(new_tiles[x + 1][y])
+                                && (y == 0 || tile.sinks_under(grid.tiles[x + 1][y - 1]));
 
                             let (left, right) = if left && right {
                                 let open_left = (x as isize - 10..x as isize)
@@ -347,7 +317,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                             .collect::<Vec<_>>()
                                     })
                                     .flatten()
-                                    .filter(|t| t.is_none())
+                                    .filter(|id| tile.sinks_under(*id))
                                     .count();
                                 let open_right = (x + 1..x + 11)
                                     .map(|x| {
@@ -356,7 +326,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                             .collect::<Vec<_>>()
                                     })
                                     .flatten()
-                                    .filter(|t| t.is_none())
+                                    .filter(|id| tile.sinks_under(*id))
                                     .count();
 
                                 if open_left > open_right {
@@ -373,13 +343,13 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             };
 
                             if left {
-                                new_tiles[x][y] = None;
+                                new_tiles[x][y] = new_tiles[x - 1][y];
                                 new_tiles[x - 1][y] = grid.tiles[x][y];
                                 continue;
                             }
 
                             if right {
-                                new_tiles[x][y] = None;
+                                new_tiles[x][y] = new_tiles[x + 1][y];
                                 new_tiles[x + 1][y] = grid.tiles[x][y];
                                 continue;
                             }
@@ -407,6 +377,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                 }
             }
         }
+        println!("{:?}", count);
 
         grid.tiles = new_tiles;
     }
