@@ -273,13 +273,11 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
 
                     // Extinguish fire
                     match grid.cells[x][y + 1] {
-                        Some(c)
-                            if c.id.data().material == Material::Fire
-                                && data.falls()
-                                && !data.flammable =>
-                        {
+                        Some(c) if c.id.data().material == Material::Fire && data.falls() => {
                             new_cells[x][y] = None;
-                            new_cells[x][y + 1] = Some(cell);
+                            if !data.flammable {
+                                new_cells[x][y + 1] = Some(cell);
+                            }
                             continue;
                         }
                         _ => (),
@@ -375,7 +373,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         Material::Fire => {
                             // Spread flames
 
-                            let mut spreads: Vec<_> = neighbors(x, y)
+                            let flammables: Vec<_> = adjacent(x, y)
                                 .into_iter()
                                 .filter(|&(nx, ny)| {
                                     grid.cells[nx][ny].is_some()
@@ -383,34 +381,51 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 })
                                 .collect();
 
-                            for _ in 0..2 {
-                                spreads.shuffle(&mut rng);
-                                if let Some((nx, ny)) = spreads.pop() {
+                            for (nx, ny) in flammables {
+                                let open: Vec<_> = adjacent(nx, ny)
+                                    .into_iter()
+                                    .filter(|&(ax, ay)| {
+                                        grid.cells[ax][ay].is_none() && new_cells[ax][ay].is_none()
+                                    })
+                                    .collect();
+
+                                if let Some(&(ax, ay)) = open.choose(&mut rng) {
+                                    new_cells[ax][ay] = Some(Cell {
+                                        id: cell.id,
+                                        life: data.lifespan,
+                                    });
+                                }
+
+                                if rng.gen::<f32>() < 0.1 {
                                     new_cells[nx][ny] = Some(Cell {
                                         id: cell.id,
                                         life: data.lifespan,
                                     });
-
-                                    if let Some(life) = &mut cell.life {
-                                        if *life >= 2 {
-                                            *life = 2;
-                                        }
-                                    }
-                                } else {
-                                    break;
                                 }
                             }
 
                             // Rise
 
-                            if y > 0
-                                && grid.cells[x][y - 1].is_none()
-                                && new_cells[x][y - 1].is_none()
-                            {
-                                new_cells[x][y] = None;
-                                new_cells[x][y - 1] = Some(cell);
-                                continue;
+                            let dx = rng.gen_range(-1..=1);
+                            let dy = rng.gen_range(-2..=0);
+
+                            let new_x =
+                                (x as isize + dx).clamp(0, GRID_WIDTH as isize - 1) as usize;
+                            let new_y =
+                                (y as isize + dy).clamp(0, GRID_HEIGHT as isize - 1) as usize;
+
+                            new_cells[x][y] = None;
+
+                            match grid.cells[new_x][new_y] {
+                                Some(c) => {
+                                    if c.id.data().flammable {
+                                        new_cells[new_x][new_y] = Some(cell);
+                                    }
+                                }
+                                None => new_cells[new_x][new_y] = Some(cell),
                             }
+
+                            continue;
                         }
                         Material::Wind => todo!(),
                     }
