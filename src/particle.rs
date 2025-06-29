@@ -8,6 +8,7 @@ use bevy::window::PrimaryWindow;
 use line_drawing::Bresenham;
 use rand::prelude::*;
 use std::cmp::max;
+use std::collections::HashMap;
 use std::time::Duration;
 
 const TILE_SIZE: f32 = 4.0;
@@ -128,14 +129,14 @@ impl TileId {
         const TILE_FIRE: Tile = Tile {
             material: Material::Fire,
             flammable: false,
-            lifespan: Some(5),
+            lifespan: Some(20),
             color: [226, 88, 34],
         };
 
         const TILE_WIND: Tile = Tile {
             material: Material::Wind,
             flammable: false,
-            lifespan: Some(15),
+            lifespan: Some(50),
             color: [255, 255, 255],
         };
 
@@ -155,6 +156,7 @@ impl TileId {
 #[derive(Resource)]
 pub struct Grid {
     pub tiles: [[Option<TileId>; GRID_HEIGHT]; GRID_WIDTH],
+    pub lifespans: HashMap<(usize, usize), u8>,
     pub timer: Timer,
     pub brush_size: usize,
     pub selected: TileId,
@@ -189,6 +191,7 @@ fn setup(
 ) {
     commands.insert_resource(Grid {
         tiles: [[None; GRID_HEIGHT]; GRID_WIDTH],
+        lifespans: HashMap::new(),
         timer: Timer::new(Duration::from_secs_f32(TICK_RATE), TimerMode::Repeating),
         brush_size: 1,
         selected: TileId::Sand,
@@ -234,11 +237,18 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
             .collect();
         coords.shuffle(&mut rng);
 
-        let mut count = 0;
         for (x, y) in coords {
+            if let Some(lifespan) = grid.lifespans.get_mut(&(x, y)) {
+                *lifespan -= 1;
+                if *lifespan == 0 {
+                    new_tiles[x][y] = None;
+                    grid.lifespans.remove(&(x, y));
+                    continue;
+                }
+            }
+
             if let Some(tile_id) = grid.tiles[x][y] {
                 let tile = tile_id.tile();
-                count += 1;
 
                 if y > 0 {
                     let above = grid.tiles[x][y - 1];
@@ -371,13 +381,47 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 continue;
                             }
                         }
-                        Material::Fire => {}
+                        Material::Fire => {
+                            let mut spreads: Vec<_> = neighbors(x, y)
+                                .into_iter()
+                                .filter(|&(nx, ny)| {
+                                    grid.tiles[nx][ny].is_some()
+                                        && grid.tiles[nx][ny].unwrap().tile().flammable
+                                })
+                                .collect();
+
+                            for _ in 0..2 {
+                                spreads.shuffle(&mut rng);
+                                if let Some((nx, ny)) = spreads.pop() {
+                                    new_tiles[nx][ny] = Some(tile_id);
+
+                                    if let Some(lifespan) = tile.lifespan {
+                                        grid.lifespans.insert((nx, ny), lifespan);
+                                    }
+
+                                    let lifespan = grid.lifespans.get_mut(&(x, y)).unwrap();
+                                    if *lifespan > 2 {
+                                        *lifespan = 2;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            if y > 0 && grid.tiles[x][y - 1].is_none() {
+                                new_tiles[x][y] = None;
+                                new_tiles[x][y - 1] = grid.tiles[x][y];
+
+                                let lifespan = grid.lifespans.remove(&(x, y)).unwrap();
+                                grid.lifespans.insert((x, y - 1), lifespan);
+                                continue;
+                            }
+                        }
                         Material::Wind => {}
                     }
                 }
             }
         }
-        println!("{:?}", count);
 
         grid.tiles = new_tiles;
     }
@@ -430,11 +474,13 @@ fn spawn_sand(
                 let mut rng = thread_rng();
                 tiles.shuffle(&mut rng);
 
-                for (x, y) in &tiles[..max(tiles.len() / 2, 1)] {
-                    let x = *x;
-                    let y = *y;
+                for (x, y) in tiles[..max(tiles.len() / 2, 1)].iter().copied() {
                     if grid.tiles[x][y].is_none() {
                         grid.tiles[x][y] = Some(grid.selected);
+
+                        if let Some(lifespan) = grid.selected.tile().lifespan {
+                            grid.lifespans.insert((x, y), lifespan);
+                        }
                     }
                 }
 
@@ -570,4 +616,26 @@ fn tiles_to_world(x: usize, y: usize) -> Vec2 {
         x as f32 * TILE_SIZE - GRID_WIDTH as f32 * TILE_SIZE / 2.0 + TILE_SIZE / 2.0,
         -(y as f32 * TILE_SIZE - GRID_HEIGHT as f32 * TILE_SIZE / 2.0 + TILE_SIZE / 2.0),
     )
+}
+
+fn neighbors(x: usize, y: usize) -> Vec<(usize, usize)> {
+    let mut ids = Vec::new();
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            let nx = x as isize + dx;
+            let ny = y as isize + dy;
+
+            if nx < 0 || nx >= GRID_WIDTH as isize || ny < 0 || ny >= GRID_HEIGHT as isize {
+                continue;
+            }
+
+            let nx = nx as usize;
+            let ny = ny as usize;
+
+            if !(nx == 0 && ny == 0) {
+                ids.push((nx, ny));
+            }
+        }
+    }
+    ids
 }
