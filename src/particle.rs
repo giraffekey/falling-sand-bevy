@@ -20,21 +20,131 @@ const TICK_RATE: f32 = 0.01;
 
 const BRUSH_SIZES: [isize; 4] = [0, 2, 4, 8];
 
-const PALETTE: [[u8; 3]; 7] = [
-    [219, 209, 180],
-    [211, 199, 162],
-    [202, 188, 145],
-    [194, 178, 128],
-    [186, 168, 111],
-    [177, 157, 94],
-    [166, 145, 80],
-];
+#[derive(Debug, Clone, Copy)]
+pub enum Material {
+    Powder,
+    Solid,
+    Liquid(u8),
+    Gas,
+    Fire,
+    Wind,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Tile {
+    pub material: Material,
+    pub flammable: bool,
+    pub lifespan: Option<u8>,
+    pub color: [u8; 3],
+}
+
+impl Tile {
+    pub fn falls(&self) -> bool {
+        match self.material {
+            Material::Powder | Material::Solid | Material::Liquid(_) => true,
+            Material::Gas | Material::Fire | Material::Wind => false,
+        }
+    }
+
+    pub fn sinks_under(&self, other: Tile) -> bool {
+        match (self.material, other.material) {
+            (Material::Powder, Material::Liquid(_)) => true,
+            (Material::Solid, Material::Liquid(_)) => true,
+            (Material::Liquid(a), Material::Liquid(b)) => a > b,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TileId {
+    Sand,
+    Stone,
+    Wood,
+    Water,
+    Petroleum,
+    Oxygen,
+    Fire,
+    Wind,
+}
+
+impl TileId {
+    pub fn tile(&self) -> Tile {
+        const TILE_SAND: Tile = Tile {
+            material: Material::Powder,
+            flammable: false,
+            lifespan: None,
+            color: [194, 178, 128],
+        };
+
+        const TILE_STONE: Tile = Tile {
+            material: Material::Solid,
+            flammable: false,
+            lifespan: None,
+            color: [83, 86, 91],
+        };
+
+        const TILE_WOOD: Tile = Tile {
+            material: Material::Solid,
+            flammable: true,
+            lifespan: None,
+            color: [164, 116, 73],
+        };
+
+        const TILE_WATER: Tile = Tile {
+            material: Material::Liquid(1),
+            flammable: false,
+            lifespan: None,
+            color: [30, 144, 255],
+        };
+
+        const TILE_PETROLEUM: Tile = Tile {
+            material: Material::Liquid(0),
+            flammable: true,
+            lifespan: None,
+            color: [59, 49, 49],
+        };
+
+        const TILE_OXYGEN: Tile = Tile {
+            material: Material::Gas,
+            flammable: true,
+            lifespan: None,
+            color: [187, 198, 213],
+        };
+
+        const TILE_FIRE: Tile = Tile {
+            material: Material::Fire,
+            flammable: false,
+            lifespan: Some(5),
+            color: [226, 88, 34],
+        };
+
+        const TILE_WIND: Tile = Tile {
+            material: Material::Wind,
+            flammable: false,
+            lifespan: Some(15),
+            color: [255, 255, 255],
+        };
+
+        match self {
+            TileId::Sand => TILE_SAND,
+            TileId::Stone => TILE_STONE,
+            TileId::Wood => TILE_WOOD,
+            TileId::Water => TILE_WATER,
+            TileId::Petroleum => TILE_PETROLEUM,
+            TileId::Oxygen => TILE_OXYGEN,
+            TileId::Fire => TILE_FIRE,
+            TileId::Wind => TILE_WIND,
+        }
+    }
+}
 
 #[derive(Resource)]
 pub struct Grid {
-    tiles: [[bool; GRID_HEIGHT]; GRID_WIDTH],
-    timer: Timer,
-    brush_size: usize,
+    pub tiles: [[Option<TileId>; GRID_HEIGHT]; GRID_WIDTH],
+    pub timer: Timer,
+    pub brush_size: usize,
+    pub selected: TileId,
 }
 
 #[derive(Resource)]
@@ -42,13 +152,6 @@ pub struct LastCursorPosition(Option<(usize, usize)>);
 
 #[derive(Component)]
 pub struct GridMesh;
-
-#[derive(Component)]
-pub struct Particle {
-    x: usize,
-    y: usize,
-    color: [u8; 3],
-}
 
 pub struct ParticlePlugin;
 
@@ -61,7 +164,8 @@ impl Plugin for ParticlePlugin {
             .add_systems(
                 Update,
                 update_brush_size.run_if(in_state(GameState::Playing)),
-            );
+            )
+            .add_systems(Update, select_tile.run_if(in_state(GameState::Playing)));
     }
 }
 
@@ -71,9 +175,10 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     commands.insert_resource(Grid {
-        tiles: [[false; GRID_HEIGHT]; GRID_WIDTH],
+        tiles: [[None; GRID_HEIGHT]; GRID_WIDTH],
         timer: Timer::new(Duration::from_secs_f32(TICK_RATE), TimerMode::Repeating),
         brush_size: 1,
+        selected: TileId::Sand,
     });
     commands.insert_resource(LastCursorPosition(None));
 
@@ -103,69 +208,187 @@ fn setup(
         .insert(Transform::default());
 }
 
-fn tick_grid(
-    time: Res<Time>,
-    mut grid: ResMut<Grid>,
-    mut q_particles: Query<&mut Particle>,
-) -> Result {
+fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
     grid.timer.tick(time.delta());
 
     if grid.timer.just_finished() {
-        let mut new_tiles = grid.tiles;
-        for mut p in &mut q_particles {
-            if p.y < GRID_HEIGHT - 1 {
-                // Fall
-                if !grid.tiles[p.x][p.y + 1] {
-                    new_tiles[p.x][p.y] = false;
-                    new_tiles[p.x][p.y + 1] = true;
-                    p.y += 1;
-                } else {
-                    // Slide down left slopes
-                    if p.x > 0
-                        && !grid.tiles[p.x - 1][p.y + 1]
-                        && (p.x == GRID_WIDTH - 1 || grid.tiles[p.x + 1][p.y])
-                    {
-                        new_tiles[p.x][p.y] = false;
-                        new_tiles[p.x - 1][p.y + 1] = true;
-                        p.x -= 1;
-                        p.y += 1;
-                    // Slide down right slopes
-                    } else if p.x < GRID_WIDTH - 1
-                        && !grid.tiles[p.x + 1][p.y + 1]
-                        && (p.x == 0 || grid.tiles[p.x - 1][p.y])
-                    {
-                        new_tiles[p.x][p.y] = false;
-                        new_tiles[p.x + 1][p.y + 1] = true;
-                        p.x += 1;
-                        p.y += 1;
-                    // Topple pillars
-                    } else if p.x > 0
-                        && p.x < GRID_WIDTH - 1
-                        && !grid.tiles[p.x - 1][p.y + 1]
-                        && !grid.tiles[p.x + 1][p.y + 1]
-                        && (p.y..GRID_HEIGHT - 1).all(|y| grid.tiles[p.x][y])
-                    {
-                        new_tiles[p.x][p.y] = false;
-                        if thread_rng().gen() {
-                            new_tiles[p.x - 1][p.y + 1] = true;
-                            p.x -= 1;
-                        } else {
-                            new_tiles[p.x + 1][p.y + 1] = true;
-                            p.x += 1;
+        let mut new_tiles = grid.tiles.clone();
+
+        let mut rng = thread_rng();
+        let mut coords: Vec<_> = (0..GRID_WIDTH)
+            .map(|x| (0..GRID_HEIGHT).map(move |y| (x, y)))
+            .flatten()
+            .collect();
+        coords.shuffle(&mut rng);
+
+        for (x, y) in coords {
+            if let Some(tile_id) = grid.tiles[x][y] {
+                let tile = tile_id.tile();
+
+                if y > 0 {
+                    let above = grid.tiles[x][y - 1];
+
+                    // Float
+                    if above.is_some() && above.unwrap().tile().sinks_under(tile) {
+                        new_tiles[x][y] = grid.tiles[x][y - 1];
+                        new_tiles[x][y - 1] = grid.tiles[x][y];
+                        continue;
+                    }
+                }
+
+                if y < GRID_HEIGHT - 1 {
+                    let below = grid.tiles[x][y + 1];
+
+                    // Fall
+                    if below.is_none() && tile.falls() {
+                        new_tiles[x][y] = None;
+                        new_tiles[x][y + 1] = grid.tiles[x][y];
+                        continue;
+                    }
+
+                    // Sink
+                    if below.is_some() && tile.sinks_under(below.unwrap().tile()) {
+                        new_tiles[x][y] = grid.tiles[x][y + 1];
+                        new_tiles[x][y + 1] = grid.tiles[x][y];
+                        continue;
+                    }
+
+                    match tile.material {
+                        Material::Powder => {
+                            // Slide down slopes
+
+                            let below_left = x > 0
+                                && grid.tiles[x - 1][y + 1].is_none()
+                                && grid.tiles[x - 1][y].is_none()
+                                && new_tiles[x - 1][y + 1].is_none();
+                            let below_right = x < GRID_WIDTH - 1
+                                && grid.tiles[x + 1][y + 1].is_none()
+                                && grid.tiles[x + 1][y].is_none()
+                                && new_tiles[x + 1][y + 1].is_none();
+
+                            let (below_left, below_right) = if below_left && below_right {
+                                if rng.gen() {
+                                    (true, false)
+                                } else {
+                                    (false, true)
+                                }
+                            } else {
+                                (below_left, below_right)
+                            };
+
+                            if below_left {
+                                new_tiles[x][y] = None;
+                                new_tiles[x - 1][y + 1] = grid.tiles[x][y];
+                                continue;
+                            }
+
+                            if below_right {
+                                new_tiles[x][y] = None;
+                                new_tiles[x + 1][y + 1] = grid.tiles[x][y];
+                                continue;
+                            }
                         }
-                        p.y += 1;
+                        Material::Solid => (),
+                        Material::Liquid(_) => {
+                            // Slide down slopes
+
+                            let below_left = x > 0
+                                && grid.tiles[x - 1][y + 1].is_none()
+                                && grid.tiles[x - 1][y].is_none()
+                                && new_tiles[x - 1][y + 1].is_none();
+                            let below_right = x < GRID_WIDTH - 1
+                                && grid.tiles[x + 1][y + 1].is_none()
+                                && grid.tiles[x + 1][y].is_none()
+                                && new_tiles[x + 1][y + 1].is_none();
+
+                            let (below_left, below_right) = if below_left && below_right {
+                                if rng.gen() {
+                                    (true, false)
+                                } else {
+                                    (false, true)
+                                }
+                            } else {
+                                (below_left, below_right)
+                            };
+
+                            if below_left {
+                                new_tiles[x][y] = None;
+                                new_tiles[x - 1][y + 1] = grid.tiles[x][y];
+                                continue;
+                            }
+
+                            if below_right {
+                                new_tiles[x][y] = None;
+                                new_tiles[x + 1][y + 1] = grid.tiles[x][y];
+                                continue;
+                            }
+
+                            // Fill gaps
+
+                            let left = x > 0
+                                && new_tiles[x - 1][y].is_none()
+                                && (y == 0 || grid.tiles[x - 1][y - 1].is_none())
+                                && (y == 0 || grid.tiles[x][y - 1] != Some(tile_id))
+                                && new_tiles[x - 1][y].is_none();
+                            let right = x < GRID_WIDTH - 1
+                                && new_tiles[x + 1][y].is_none()
+                                && (y == 0 || grid.tiles[x + 1][y - 1].is_none())
+                                && (y == 0 || grid.tiles[x][y - 1] != Some(tile_id));
+
+                            let (left, right) = if left && right {
+                                let open_left = (0..x)
+                                    .take_while(|x| {
+                                        grid.tiles[*x][y].is_none()
+                                            || grid.tiles[*x][y] == Some(tile_id)
+                                    })
+                                    .filter(|x| grid.tiles[*x][y].is_none())
+                                    .count();
+                                let open_right = (x + 1..GRID_WIDTH)
+                                    .take_while(|x| {
+                                        grid.tiles[*x][y].is_none()
+                                            || grid.tiles[*x][y] == Some(tile_id)
+                                    })
+                                    .filter(|x| grid.tiles[*x][y].is_none())
+                                    .count();
+
+                                if open_left > open_right {
+                                    (true, false)
+                                } else if open_left < open_right {
+                                    (false, true)
+                                } else if rng.gen() {
+                                    (true, false)
+                                } else {
+                                    (false, true)
+                                }
+                            } else {
+                                (left, right)
+                            };
+
+                            if left {
+                                new_tiles[x][y] = None;
+                                new_tiles[x - 1][y] = grid.tiles[x][y];
+                                continue;
+                            }
+
+                            if right {
+                                new_tiles[x][y] = None;
+                                new_tiles[x + 1][y] = grid.tiles[x][y];
+                                continue;
+                            }
+                        }
+                        Material::Gas => {}
+                        Material::Fire => {}
+                        Material::Wind => {}
                     }
                 }
             }
         }
+
         grid.tiles = new_tiles;
     }
-
-    Ok(())
 }
 
 fn spawn_sand(
-    mut commands: Commands,
     buttons: Res<ButtonInput<MouseButton>>,
     q_window: Single<&Window, With<PrimaryWindow>>,
     q_camera: Single<(&Camera, &GlobalTransform)>,
@@ -215,10 +438,8 @@ fn spawn_sand(
                 for (x, y) in &tiles[..max(tiles.len() / 2, 1)] {
                     let x = *x;
                     let y = *y;
-                    if !grid.tiles[x][y] {
-                        let color = *PALETTE.choose(&mut rng).unwrap();
-                        commands.spawn(Particle { x, y, color });
-                        grid.tiles[x][y] = true;
+                    if grid.tiles[x][y].is_none() {
+                        grid.tiles[x][y] = Some(grid.selected);
                     }
                 }
 
@@ -234,50 +455,53 @@ fn spawn_sand(
 
 fn draw_grid(
     mut meshes: ResMut<Assets<Mesh>>,
-    q_particles: Query<&Particle>,
+    grid: Res<Grid>,
     mut grid_mesh: Single<&mut Mesh2d, With<GridMesh>>,
 ) {
     let mut vertices = Vec::new();
     let mut vertex_colors = Vec::new();
     let mut indices = Vec::new();
-    for (i, p) in q_particles.iter().enumerate() {
-        let position = tiles_to_world(p.x, p.y);
-        vertices.extend([
-            [
-                position.x - TILE_SIZE / 2.0,
-                position.y - TILE_SIZE / 2.0,
-                0.0,
-            ],
-            [
-                position.x + TILE_SIZE / 2.0,
-                position.y - TILE_SIZE / 2.0,
-                0.0,
-            ],
-            [
-                position.x + TILE_SIZE / 2.0,
-                position.y + TILE_SIZE / 2.0,
-                0.0,
-            ],
-            [
-                position.x - TILE_SIZE / 2.0,
-                position.y + TILE_SIZE / 2.0,
-                0.0,
-            ],
-        ]);
 
-        let c = [
-            p.color[0] as f32 / 255.0,
-            p.color[1] as f32 / 255.0,
-            p.color[2] as f32 / 255.0,
-            1.0,
-        ];
-        vertex_colors.extend([c, c, c, c]);
+    for x in 0..GRID_WIDTH {
+        for y in 0..GRID_HEIGHT {
+            if let Some(tile_id) = grid.tiles[x][y] {
+                let position = tiles_to_world(x, y);
+                vertices.extend([
+                    [
+                        position.x - TILE_SIZE / 2.0,
+                        position.y - TILE_SIZE / 2.0,
+                        0.0,
+                    ],
+                    [
+                        position.x + TILE_SIZE / 2.0,
+                        position.y - TILE_SIZE / 2.0,
+                        0.0,
+                    ],
+                    [
+                        position.x + TILE_SIZE / 2.0,
+                        position.y + TILE_SIZE / 2.0,
+                        0.0,
+                    ],
+                    [
+                        position.x - TILE_SIZE / 2.0,
+                        position.y + TILE_SIZE / 2.0,
+                        0.0,
+                    ],
+                ]);
 
-        let index = i as u32 * 4;
-        indices.extend([
-            index, index + 1, index + 2,
-            index, index + 2, index + 3,
-        ]);
+                let color = tile_id.tile().color;
+                let c = [
+                    color[0] as f32 / 255.0,
+                    color[1] as f32 / 255.0,
+                    color[2] as f32 / 255.0,
+                    1.0,
+                ];
+                vertex_colors.extend([c, c, c, c]);
+
+                let index = vertices.len() as u32 - 4;
+                indices.extend([index, index + 1, index + 2, index, index + 2, index + 3]);
+            }
+        }
     }
 
     if !vertices.is_empty() && !vertex_colors.is_empty() {
@@ -306,6 +530,33 @@ fn update_brush_size(mut evr_scroll: EventReader<MouseWheel>, mut grid: ResMut<G
         } else if ev.y > 0.0 && grid.brush_size < BRUSH_SIZES.len() - 1 {
             grid.brush_size += 1;
         }
+    }
+}
+
+fn select_tile(keyboard_input: Res<ButtonInput<KeyCode>>, mut grid: ResMut<Grid>) {
+    if keyboard_input.just_pressed(KeyCode::Digit1) {
+        grid.selected = TileId::Sand;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit2) {
+        grid.selected = TileId::Stone;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit3) {
+        grid.selected = TileId::Wood;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit4) {
+        grid.selected = TileId::Water;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit5) {
+        grid.selected = TileId::Petroleum;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit6) {
+        grid.selected = TileId::Oxygen;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit7) {
+        grid.selected = TileId::Fire;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit8) {
+        grid.selected = TileId::Wind;
     }
 }
 
