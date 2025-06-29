@@ -8,10 +8,9 @@ use bevy::window::PrimaryWindow;
 use line_drawing::Bresenham;
 use rand::prelude::*;
 use std::cmp::max;
-use std::collections::HashMap;
 use std::time::Duration;
 
-const TILE_SIZE: f32 = 4.0;
+const DATA_SIZE: f32 = 4.0;
 
 const GRID_WIDTH: usize = 320;
 
@@ -32,14 +31,14 @@ pub enum Material {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Tile {
+pub struct CellData {
     pub material: Material,
     pub flammable: bool,
     pub lifespan: Option<u8>,
     pub color: [u8; 3],
 }
 
-impl Tile {
+impl CellData {
     pub fn falls(&self) -> bool {
         match self.material {
             Material::Powder | Material::Solid | Material::Liquid(_) => true,
@@ -54,9 +53,9 @@ impl Tile {
         }
     }
 
-    pub fn sinks_under(&self, other: Option<TileId>) -> bool {
+    pub fn sinks_under(&self, other: Option<Cell>) -> bool {
         match other {
-            Some(other) => match (self.material, other.tile().material) {
+            Some(other) => match (self.material, other.id.data().material) {
                 (Material::Powder, Material::Liquid(_)) => true,
                 (Material::Solid, Material::Liquid(_)) => true,
                 (Material::Liquid(a), Material::Liquid(b)) => a > b,
@@ -71,69 +70,69 @@ impl Tile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TileId {
+pub enum CellId {
     Sand,
     Stone,
     Wood,
     Water,
-    Petroleum,
+    Oil,
     Oxygen,
     Fire,
     Wind,
 }
 
-impl TileId {
-    pub fn tile(&self) -> Tile {
-        const TILE_SAND: Tile = Tile {
+impl CellId {
+    pub fn data(&self) -> CellData {
+        const DATA_SAND: CellData = CellData {
             material: Material::Powder,
             flammable: false,
             lifespan: None,
             color: [194, 178, 128],
         };
 
-        const TILE_STONE: Tile = Tile {
+        const DATA_STONE: CellData = CellData {
             material: Material::Solid,
             flammable: false,
             lifespan: None,
             color: [83, 86, 91],
         };
 
-        const TILE_WOOD: Tile = Tile {
+        const DATA_WOOD: CellData = CellData {
             material: Material::Solid,
             flammable: true,
             lifespan: None,
             color: [164, 116, 73],
         };
 
-        const TILE_WATER: Tile = Tile {
+        const DATA_WATER: CellData = CellData {
             material: Material::Liquid(1),
             flammable: false,
             lifespan: None,
             color: [30, 144, 255],
         };
 
-        const TILE_PETROLEUM: Tile = Tile {
+        const DATA_OIL: CellData = CellData {
             material: Material::Liquid(0),
             flammable: true,
             lifespan: None,
             color: [59, 49, 49],
         };
 
-        const TILE_OXYGEN: Tile = Tile {
+        const DATA_OXYGEN: CellData = CellData {
             material: Material::Gas,
             flammable: true,
             lifespan: None,
             color: [187, 198, 213],
         };
 
-        const TILE_FIRE: Tile = Tile {
+        const DATA_FIRE: CellData = CellData {
             material: Material::Fire,
             flammable: false,
             lifespan: Some(20),
             color: [226, 88, 34],
         };
 
-        const TILE_WIND: Tile = Tile {
+        const DATA_WIND: CellData = CellData {
             material: Material::Wind,
             flammable: false,
             lifespan: Some(50),
@@ -141,25 +140,30 @@ impl TileId {
         };
 
         match self {
-            TileId::Sand => TILE_SAND,
-            TileId::Stone => TILE_STONE,
-            TileId::Wood => TILE_WOOD,
-            TileId::Water => TILE_WATER,
-            TileId::Petroleum => TILE_PETROLEUM,
-            TileId::Oxygen => TILE_OXYGEN,
-            TileId::Fire => TILE_FIRE,
-            TileId::Wind => TILE_WIND,
+            CellId::Sand => DATA_SAND,
+            CellId::Stone => DATA_STONE,
+            CellId::Wood => DATA_WOOD,
+            CellId::Water => DATA_WATER,
+            CellId::Oil => DATA_OIL,
+            CellId::Oxygen => DATA_OXYGEN,
+            CellId::Fire => DATA_FIRE,
+            CellId::Wind => DATA_WIND,
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cell {
+    pub id: CellId,
+    pub life: Option<u8>,
+}
+
 #[derive(Resource)]
 pub struct Grid {
-    pub tiles: [[Option<TileId>; GRID_HEIGHT]; GRID_WIDTH],
-    pub lifespans: HashMap<(usize, usize), u8>,
+    pub cells: Vec<Vec<Option<Cell>>>,
     pub timer: Timer,
     pub brush_size: usize,
-    pub selected: TileId,
+    pub selected: CellId,
 }
 
 #[derive(Resource)]
@@ -190,11 +194,10 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     commands.insert_resource(Grid {
-        tiles: [[None; GRID_HEIGHT]; GRID_WIDTH],
-        lifespans: HashMap::new(),
+        cells: vec![vec![None; GRID_HEIGHT]; GRID_WIDTH],
         timer: Timer::new(Duration::from_secs_f32(TICK_RATE), TimerMode::Repeating),
         brush_size: 1,
-        selected: TileId::Sand,
+        selected: CellId::Sand,
     });
     commands.insert_resource(LastCursorPosition(None));
 
@@ -228,7 +231,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
     grid.timer.tick(time.delta());
 
     if grid.timer.just_finished() {
-        let mut new_tiles = grid.tiles.clone();
+        let mut new_cells = grid.cells.clone();
 
         let mut rng = thread_rng();
         let mut coords: Vec<_> = (0..GRID_WIDTH)
@@ -238,62 +241,60 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
         coords.shuffle(&mut rng);
 
         for (x, y) in coords {
-            if let Some(lifespan) = grid.lifespans.get_mut(&(x, y)) {
-                *lifespan -= 1;
-                if *lifespan == 0 {
-                    new_tiles[x][y] = None;
-                    grid.lifespans.remove(&(x, y));
-                    continue;
+            if let Some(mut cell) = grid.cells[x][y] {
+                if let Some(life) = &mut cell.life {
+                    *life -= 1;
+                    if *life == 0 {
+                        new_cells[x][y] = None;
+                        continue;
+                    }
                 }
-            }
 
-            if let Some(tile_id) = grid.tiles[x][y] {
-                let tile = tile_id.tile();
+                let data = cell.id.data();
 
                 if y > 0 {
-                    let above = grid.tiles[x][y - 1];
+                    let above = grid.cells[x][y - 1];
 
                     // Float
-                    if above.is_some() && above.unwrap().tile().sinks_under(Some(tile_id)) {
-                        new_tiles[x][y] = above;
-                        new_tiles[x][y - 1] = grid.tiles[x][y];
+                    if above.is_some() && above.unwrap().id.data().sinks_under(Some(cell)) {
+                        new_cells[x][y] = above;
+                        new_cells[x][y - 1] = Some(cell);
                         continue;
                     }
                 }
 
                 if y < GRID_HEIGHT - 1 {
                     // Fall
-                    if tile.falls() && tile.sinks_under(grid.tiles[x][y + 1]) {
-                        new_tiles[x][y] = grid.tiles[x][y + 1];
-                        new_tiles[x][y + 1] = grid.tiles[x][y];
+                    if data.falls() && data.sinks_under(grid.cells[x][y + 1]) {
+                        new_cells[x][y] = grid.cells[x][y + 1];
+                        new_cells[x][y + 1] = Some(cell);
                         continue;
                     }
 
                     // Extinguish fire
-                    match grid.tiles[x][y + 1] {
-                        Some(id)
-                            if id.tile().material == Material::Fire
-                                && tile.falls()
-                                && !tile.flammable =>
+                    match grid.cells[x][y + 1] {
+                        Some(c)
+                            if c.id.data().material == Material::Fire
+                                && data.falls()
+                                && !data.flammable =>
                         {
-                            new_tiles[x][y] = None;
-                            new_tiles[x][y + 1] = grid.tiles[x][y];
-                            grid.lifespans.remove(&(x, y + 1));
+                            new_cells[x][y] = None;
+                            new_cells[x][y + 1] = Some(cell);
                             continue;
                         }
                         _ => (),
                     }
 
                     // Slide down slopes
-                    if tile.slides() {
+                    if data.slides() {
                         let below_left = x > 0
-                            && tile.sinks_under(grid.tiles[x - 1][y + 1])
-                            && tile.sinks_under(grid.tiles[x - 1][y])
-                            && grid.tiles[x - 1][y + 1] == new_tiles[x - 1][y + 1];
+                            && data.sinks_under(grid.cells[x - 1][y + 1])
+                            && data.sinks_under(grid.cells[x - 1][y])
+                            && grid.cells[x - 1][y + 1] == new_cells[x - 1][y + 1];
                         let below_right = x < GRID_WIDTH - 1
-                            && tile.sinks_under(grid.tiles[x + 1][y + 1])
-                            && tile.sinks_under(grid.tiles[x + 1][y])
-                            && grid.tiles[x + 1][y + 1] == new_tiles[x + 1][y + 1];
+                            && data.sinks_under(grid.cells[x + 1][y + 1])
+                            && data.sinks_under(grid.cells[x + 1][y])
+                            && grid.cells[x + 1][y + 1] == new_cells[x + 1][y + 1];
 
                         let (below_left, below_right) = if below_left && below_right {
                             if rng.gen() {
@@ -306,59 +307,32 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         };
 
                         if below_left {
-                            new_tiles[x][y] = grid.tiles[x - 1][y + 1];
-                            new_tiles[x - 1][y + 1] = grid.tiles[x][y];
+                            new_cells[x][y] = grid.cells[x - 1][y + 1];
+                            new_cells[x - 1][y + 1] = Some(cell);
                             continue;
                         }
 
                         if below_right {
-                            new_tiles[x][y] = grid.tiles[x + 1][y + 1];
-                            new_tiles[x + 1][y + 1] = grid.tiles[x][y];
+                            new_cells[x][y] = grid.cells[x + 1][y + 1];
+                            new_cells[x + 1][y + 1] = Some(cell);
                             continue;
                         }
                     }
 
-                    match tile.material {
+                    match data.material {
                         Material::Powder | Material::Solid => (),
                         Material::Liquid(_) => {
                             // Fill gaps
 
                             let left = x > 0
-                                && tile.sinks_under(new_tiles[x - 1][y])
-                                && (y == 0 || tile.sinks_under(grid.tiles[x - 1][y - 1]));
+                                && data.sinks_under(new_cells[x - 1][y])
+                                && (y == 0 || data.sinks_under(grid.cells[x - 1][y - 1]));
                             let right = x < GRID_WIDTH - 1
-                                && tile.sinks_under(new_tiles[x + 1][y])
-                                && (y == 0 || tile.sinks_under(grid.tiles[x + 1][y - 1]));
+                                && data.sinks_under(new_cells[x + 1][y])
+                                && (y == 0 || data.sinks_under(grid.cells[x + 1][y - 1]));
 
                             let (left, right) = if left && right {
-                                let open_left = (x as isize - 10..x as isize)
-                                    .map(|x| {
-                                        (y..GRID_HEIGHT)
-                                            .map(|y| {
-                                                grid.tiles
-                                                    [x.clamp(0, GRID_WIDTH as isize - 1) as usize]
-                                                    [y]
-                                            })
-                                            .collect::<Vec<_>>()
-                                    })
-                                    .flatten()
-                                    .filter(|id| tile.sinks_under(*id))
-                                    .count();
-                                let open_right = (x + 1..x + 11)
-                                    .map(|x| {
-                                        (y..GRID_HEIGHT)
-                                            .map(|y| grid.tiles[x.clamp(0, GRID_WIDTH - 1)][y])
-                                            .collect::<Vec<_>>()
-                                    })
-                                    .flatten()
-                                    .filter(|id| tile.sinks_under(*id))
-                                    .count();
-
-                                if open_left > open_right {
-                                    (true, false)
-                                } else if open_left < open_right {
-                                    (false, true)
-                                } else if rng.gen() {
+                                if rng.gen() {
                                     (true, false)
                                 } else {
                                     (false, true)
@@ -368,14 +342,14 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             };
 
                             if left {
-                                new_tiles[x][y] = new_tiles[x - 1][y];
-                                new_tiles[x - 1][y] = grid.tiles[x][y];
+                                new_cells[x][y] = new_cells[x - 1][y];
+                                new_cells[x - 1][y] = Some(cell);
                                 continue;
                             }
 
                             if right {
-                                new_tiles[x][y] = new_tiles[x + 1][y];
-                                new_tiles[x + 1][y] = grid.tiles[x][y];
+                                new_cells[x][y] = new_cells[x + 1][y];
+                                new_cells[x + 1][y] = Some(cell);
                                 continue;
                             }
                         }
@@ -390,37 +364,37 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             let new_y =
                                 (y as isize + dy).clamp(0, GRID_HEIGHT as isize - 1) as usize;
 
-                            if grid.tiles[new_x][new_y].is_none()
-                                && new_tiles[new_x][new_y].is_none()
+                            if grid.cells[new_x][new_y].is_none()
+                                && new_cells[new_x][new_y].is_none()
                             {
-                                new_tiles[x][y] = None;
-                                new_tiles[new_x][new_y] = grid.tiles[x][y];
+                                new_cells[x][y] = None;
+                                new_cells[new_x][new_y] = Some(cell);
                                 continue;
                             }
                         }
                         Material::Fire => {
                             // Spread flames
 
-                            let mut spreads: Vec<_> = adjacent(x, y)
+                            let mut spreads: Vec<_> = neighbors(x, y)
                                 .into_iter()
                                 .filter(|&(nx, ny)| {
-                                    grid.tiles[nx][ny].is_some()
-                                        && grid.tiles[nx][ny].unwrap().tile().flammable
+                                    grid.cells[nx][ny].is_some()
+                                        && grid.cells[nx][ny].unwrap().id.data().flammable
                                 })
                                 .collect();
 
                             for _ in 0..2 {
                                 spreads.shuffle(&mut rng);
                                 if let Some((nx, ny)) = spreads.pop() {
-                                    new_tiles[nx][ny] = Some(tile_id);
+                                    new_cells[nx][ny] = Some(Cell {
+                                        id: cell.id,
+                                        life: data.lifespan,
+                                    });
 
-                                    if let Some(lifespan) = tile.lifespan {
-                                        grid.lifespans.insert((nx, ny), lifespan);
-                                    }
-
-                                    let lifespan = grid.lifespans.get_mut(&(x, y)).unwrap();
-                                    if *lifespan > 2 {
-                                        *lifespan = 2;
+                                    if let Some(life) = &mut cell.life {
+                                        if *life >= 2 {
+                                            *life = 2;
+                                        }
                                     }
                                 } else {
                                     break;
@@ -430,24 +404,23 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             // Rise
 
                             if y > 0
-                                && grid.tiles[x][y - 1].is_none()
-                                && new_tiles[x][y - 1].is_none()
+                                && grid.cells[x][y - 1].is_none()
+                                && new_cells[x][y - 1].is_none()
                             {
-                                new_tiles[x][y] = None;
-                                new_tiles[x][y - 1] = grid.tiles[x][y];
-
-                                let lifespan = grid.lifespans.remove(&(x, y)).unwrap();
-                                grid.lifespans.insert((x, y - 1), lifespan);
+                                new_cells[x][y] = None;
+                                new_cells[x][y - 1] = Some(cell);
                                 continue;
                             }
                         }
-                        Material::Wind => {}
+                        Material::Wind => todo!(),
                     }
                 }
+
+                new_cells[x][y] = Some(cell);
             }
         }
 
-        grid.tiles = new_tiles;
+        grid.cells = new_cells;
     }
 }
 
@@ -499,12 +472,11 @@ fn spawn_sand(
                 tiles.shuffle(&mut rng);
 
                 for (x, y) in tiles[..max(tiles.len() / 2, 1)].iter().copied() {
-                    if grid.tiles[x][y].is_none() {
-                        grid.tiles[x][y] = Some(grid.selected);
-
-                        if let Some(lifespan) = grid.selected.tile().lifespan {
-                            grid.lifespans.insert((x, y), lifespan);
-                        }
+                    if grid.cells[x][y].is_none() {
+                        grid.cells[x][y] = Some(Cell {
+                            id: grid.selected,
+                            life: grid.selected.data().lifespan,
+                        });
                     }
                 }
 
@@ -529,32 +501,32 @@ fn draw_grid(
 
     for x in 0..GRID_WIDTH {
         for y in 0..GRID_HEIGHT {
-            if let Some(tile_id) = grid.tiles[x][y] {
+            if let Some(cell) = grid.cells[x][y] {
                 let position = tiles_to_world(x, y);
                 vertices.extend([
                     [
-                        position.x - TILE_SIZE / 2.0,
-                        position.y - TILE_SIZE / 2.0,
+                        position.x - DATA_SIZE / 2.0,
+                        position.y - DATA_SIZE / 2.0,
                         0.0,
                     ],
                     [
-                        position.x + TILE_SIZE / 2.0,
-                        position.y - TILE_SIZE / 2.0,
+                        position.x + DATA_SIZE / 2.0,
+                        position.y - DATA_SIZE / 2.0,
                         0.0,
                     ],
                     [
-                        position.x + TILE_SIZE / 2.0,
-                        position.y + TILE_SIZE / 2.0,
+                        position.x + DATA_SIZE / 2.0,
+                        position.y + DATA_SIZE / 2.0,
                         0.0,
                     ],
                     [
-                        position.x - TILE_SIZE / 2.0,
-                        position.y + TILE_SIZE / 2.0,
+                        position.x - DATA_SIZE / 2.0,
+                        position.y + DATA_SIZE / 2.0,
                         0.0,
                     ],
                 ]);
 
-                let color = tile_id.tile().color;
+                let color = cell.id.data().color;
                 let c = [
                     color[0] as f32 / 255.0,
                     color[1] as f32 / 255.0,
@@ -600,34 +572,31 @@ fn update_brush_size(mut evr_scroll: EventReader<MouseWheel>, mut grid: ResMut<G
 
 fn select_tile(keyboard_input: Res<ButtonInput<KeyCode>>, mut grid: ResMut<Grid>) {
     if keyboard_input.just_pressed(KeyCode::Digit1) {
-        grid.selected = TileId::Sand;
+        grid.selected = CellId::Sand;
     }
     if keyboard_input.just_pressed(KeyCode::Digit2) {
-        grid.selected = TileId::Stone;
+        grid.selected = CellId::Stone;
     }
     if keyboard_input.just_pressed(KeyCode::Digit3) {
-        grid.selected = TileId::Wood;
+        grid.selected = CellId::Wood;
     }
     if keyboard_input.just_pressed(KeyCode::Digit4) {
-        grid.selected = TileId::Water;
+        grid.selected = CellId::Water;
     }
     if keyboard_input.just_pressed(KeyCode::Digit5) {
-        grid.selected = TileId::Petroleum;
+        grid.selected = CellId::Oil;
     }
     if keyboard_input.just_pressed(KeyCode::Digit6) {
-        grid.selected = TileId::Oxygen;
+        grid.selected = CellId::Oxygen;
     }
     if keyboard_input.just_pressed(KeyCode::Digit7) {
-        grid.selected = TileId::Fire;
-    }
-    if keyboard_input.just_pressed(KeyCode::Digit8) {
-        grid.selected = TileId::Wind;
+        grid.selected = CellId::Fire;
     }
 }
 
 fn world_to_tiles(position: Vec2) -> Option<(usize, usize)> {
-    let x = (position.x + GRID_WIDTH as f32 * TILE_SIZE / 2.0) / TILE_SIZE;
-    let y = (-position.y + GRID_HEIGHT as f32 * TILE_SIZE / 2.0) / TILE_SIZE;
+    let x = (position.x + GRID_WIDTH as f32 * DATA_SIZE / 2.0) / DATA_SIZE;
+    let y = (-position.y + GRID_HEIGHT as f32 * DATA_SIZE / 2.0) / DATA_SIZE;
     if x >= 0.0 && (x as usize) < GRID_WIDTH && y >= 0.0 && (y as usize) < GRID_HEIGHT {
         Some((x as usize, y as usize))
     } else {
@@ -637,8 +606,8 @@ fn world_to_tiles(position: Vec2) -> Option<(usize, usize)> {
 
 fn tiles_to_world(x: usize, y: usize) -> Vec2 {
     Vec2::new(
-        x as f32 * TILE_SIZE - GRID_WIDTH as f32 * TILE_SIZE / 2.0 + TILE_SIZE / 2.0,
-        -(y as f32 * TILE_SIZE - GRID_HEIGHT as f32 * TILE_SIZE / 2.0 + TILE_SIZE / 2.0),
+        x as f32 * DATA_SIZE - GRID_WIDTH as f32 * DATA_SIZE / 2.0 + DATA_SIZE / 2.0,
+        -(y as f32 * DATA_SIZE - GRID_HEIGHT as f32 * DATA_SIZE / 2.0 + DATA_SIZE / 2.0),
     )
 }
 
@@ -660,9 +629,13 @@ fn adjacent(x: usize, y: usize) -> Vec<(usize, usize)> {
 }
 
 fn neighbors(x: usize, y: usize) -> Vec<(usize, usize)> {
+    neighbors_within(x, y, 1)
+}
+
+fn neighbors_within(x: usize, y: usize, n: usize) -> Vec<(usize, usize)> {
     let mut ids = Vec::new();
-    for dx in -1..=1 {
-        for dy in -1..=1 {
+    for dx in -(n as isize)..=n as isize {
+        for dy in -(n as isize)..=n as isize {
             let nx = x as isize + dx;
             let ny = y as isize + dy;
 
