@@ -51,6 +51,9 @@ impl Tile {
             (Material::Powder, Material::Liquid(_)) => true,
             (Material::Solid, Material::Liquid(_)) => true,
             (Material::Liquid(a), Material::Liquid(b)) => a > b,
+            (Material::Powder, Material::Gas) => true,
+            (Material::Solid, Material::Gas) => true,
+            (Material::Liquid(_), Material::Gas) => true,
             _ => false,
         }
     }
@@ -327,28 +330,33 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
 
                             let left = x > 0
                                 && new_tiles[x - 1][y].is_none()
-                                && (y == 0 || grid.tiles[x - 1][y - 1].is_none())
-                                && (y == 0 || grid.tiles[x][y - 1] != Some(tile_id))
-                                && new_tiles[x - 1][y].is_none();
+                                && (y == 0 || grid.tiles[x - 1][y - 1].is_none());
                             let right = x < GRID_WIDTH - 1
                                 && new_tiles[x + 1][y].is_none()
-                                && (y == 0 || grid.tiles[x + 1][y - 1].is_none())
-                                && (y == 0 || grid.tiles[x][y - 1] != Some(tile_id));
+                                && (y == 0 || grid.tiles[x + 1][y - 1].is_none());
 
                             let (left, right) = if left && right {
-                                let open_left = (0..x)
-                                    .take_while(|x| {
-                                        grid.tiles[*x][y].is_none()
-                                            || grid.tiles[*x][y] == Some(tile_id)
+                                let open_left = (x as isize - 10..x as isize)
+                                    .map(|x| {
+                                        (y..GRID_HEIGHT)
+                                            .map(|y| {
+                                                grid.tiles
+                                                    [x.clamp(0, GRID_WIDTH as isize - 1) as usize]
+                                                    [y]
+                                            })
+                                            .collect::<Vec<_>>()
                                     })
-                                    .filter(|x| grid.tiles[*x][y].is_none())
+                                    .flatten()
+                                    .filter(|t| t.is_none())
                                     .count();
-                                let open_right = (x + 1..GRID_WIDTH)
-                                    .take_while(|x| {
-                                        grid.tiles[*x][y].is_none()
-                                            || grid.tiles[*x][y] == Some(tile_id)
+                                let open_right = (x + 1..x + 11)
+                                    .map(|x| {
+                                        (y..GRID_HEIGHT)
+                                            .map(|y| grid.tiles[x.clamp(0, GRID_WIDTH - 1)][y])
+                                            .collect::<Vec<_>>()
                                     })
-                                    .filter(|x| grid.tiles[*x][y].is_none())
+                                    .flatten()
+                                    .filter(|t| t.is_none())
                                     .count();
 
                                 if open_left > open_right {
@@ -376,7 +384,23 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 continue;
                             }
                         }
-                        Material::Gas => {}
+                        Material::Gas => {
+                            let dx = rng.gen_range(-1..=1);
+                            let dy = rng.gen_range(-1..=1);
+
+                            let new_x =
+                                (x as isize + dx).clamp(0, GRID_WIDTH as isize - 1) as usize;
+                            let new_y =
+                                (y as isize + dy).clamp(0, GRID_HEIGHT as isize - 1) as usize;
+
+                            if grid.tiles[new_x][new_y].is_none()
+                                && new_tiles[new_x][new_y].is_none()
+                            {
+                                new_tiles[x][y] = None;
+                                new_tiles[new_x][new_y] = grid.tiles[x][y];
+                                continue;
+                            }
+                        }
                         Material::Fire => {}
                         Material::Wind => {}
                     }
