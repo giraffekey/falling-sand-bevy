@@ -1,35 +1,23 @@
 #![allow(clippy::type_complexity)]
 
-mod actions;
 mod audio;
+mod cell;
 mod loading;
-mod menu;
-mod particle;
-mod player;
 
-use crate::actions::ActionsPlugin;
 use crate::audio::InternalAudioPlugin;
+use crate::cell::CellPlugin;
 use crate::loading::LoadingPlugin;
-use crate::menu::MenuPlugin;
-use crate::particle::ParticlePlugin;
-use crate::player::PlayerPlugin;
 
 use bevy::app::App;
 #[cfg(debug_assertions)]
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::prelude::*;
 
-// This example game uses States to separate logic
-// See https://bevy-cheatbook.github.io/programming/states.html
-// Or https://github.com/bevyengine/bevy/blob/main/examples/ecs/state.rs
+// This game uses States to separate logic
 #[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
 enum GameState {
-    // During the loading State the LoadingPlugin will load our assets
     #[default]
     Loading,
-    // Here the menu is drawn and waiting for player interaction
-    Menu,
-    // During this State the actual game logic is executed
     Playing,
 }
 
@@ -37,14 +25,8 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.init_state::<GameState>().add_plugins((
-            LoadingPlugin,
-            MenuPlugin,
-            ActionsPlugin,
-            InternalAudioPlugin,
-            PlayerPlugin,
-            ParticlePlugin,
-        ));
+        app.init_state::<GameState>()
+            .add_plugins((LoadingPlugin, InternalAudioPlugin, CellPlugin));
 
         #[cfg(debug_assertions)]
         {

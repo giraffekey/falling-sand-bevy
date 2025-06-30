@@ -172,9 +172,9 @@ pub struct LastCursorPosition(Option<(usize, usize)>);
 #[derive(Component)]
 pub struct GridMesh;
 
-pub struct ParticlePlugin;
+pub struct CellPlugin;
 
-impl Plugin for ParticlePlugin {
+impl Plugin for CellPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::Playing), setup)
             .add_systems(Update, tick_grid.run_if(in_state(GameState::Playing)))
@@ -193,6 +193,7 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    commands.spawn((Camera2d, Msaa::Off));
     commands.insert_resource(Grid {
         cells: vec![vec![None; GRID_HEIGHT]; GRID_WIDTH],
         timer: Timer::new(Duration::from_secs_f32(TICK_RATE), TimerMode::Repeating),
@@ -396,7 +397,12 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                     });
                                 }
 
-                                if rng.gen::<f32>() < 0.1 {
+                                let chance = match grid.cells[nx][ny].unwrap().id.data().material {
+                                    Material::Liquid(_) => 0.55,
+                                    _ => 0.1,
+                                };
+
+                                if rng.gen::<f32>() < chance {
                                     new_cells[nx][ny] = Some(Cell {
                                         id: cell.id,
                                         life: data.lifespan,
@@ -430,8 +436,6 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         Material::Wind => todo!(),
                     }
                 }
-
-                new_cells[x][y] = Some(cell);
             }
         }
 
