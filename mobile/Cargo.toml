@@ -1,0 +1,34 @@
+[package]
+name = "mobile"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "mobile"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+falling-sand = { path = ".." }
+bevy = { version = "0.16.0", default-features = false, features = ["android-native-activity"] }
+
+[target."cfg(target_os = \"ios\")".dependencies]
+objc2-avf-audio = { version = "0.3.0", features = [
+    "AVAudioSession",
+    "AVAudioSessionTypes",
+] }
+
+[package.metadata.android]
+package = "com.masterofgiraffe.powder-keg"
+apk_name = "PowderKeg"
+assets = "../assets"
+strip = "strip"
+resources = "../build/android/res"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+target_sdk_version = 35
+
+[package.metadata.android.application]
+icon = "@mipmap/icon"
+label = "Powder Keg"
