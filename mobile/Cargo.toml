@@ -9,7 +9,7 @@ name = "mobile"
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-falling-sand = { path = ".." }
+powder-keg = { path = ".." }
 bevy = { version = "0.16.0", default-features = false, features = ["android-native-activity"] }
 
 [target."cfg(target_os = \"ios\")".dependencies]

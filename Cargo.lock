@@ -2001,22 +2001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "falling-sand"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_asset_loader",
- "bevy_kira_audio",
- "embed-resource",
- "image",
- "line_drawing",
- "log",
- "rand 0.8.5",
- "webbrowser",
- "winit",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2953,8 +2937,8 @@ name = "mobile"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "falling-sand",
  "objc2-avf-audio",
+ "powder-keg",
 ]
 
 [[package]]
@@ -3624,6 +3608,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "powder-keg"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_asset_loader",
+ "bevy_kira_audio",
+ "embed-resource",
+ "image",
+ "line_drawing",
+ "log",
+ "rand 0.8.5",
+ "webbrowser",
+ "winit",
 ]
 
 [[package]]

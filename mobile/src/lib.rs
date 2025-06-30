@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::window::WindowMode;
 use bevy::winit::WinitSettings;
-use falling_sand::GamePlugin;
+use powder_keg::GamePlugin;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn main_rs() {
