@@ -19,7 +19,7 @@ objc2-avf-audio = { version = "0.3.0", features = [
 ] }
 
 [package.metadata.android]
-package = "com.masterofgiraffe.powder-keg"
+package = "com.masterofgiraffe.powderkeg"
 apk_name = "PowderKeg"
 assets = "../assets"
 strip = "strip"
