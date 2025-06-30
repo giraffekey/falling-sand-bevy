@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::winit::WinitWindows;
 use bevy::DefaultPlugins;
-use falling_sand::GamePlugin;
+use powder_keg::GamePlugin;
 use std::io::Cursor;
 use winit::window::Icon;
 
