@@ -2,10 +2,11 @@
 
 mod audio;
 mod cell;
+mod grid;
 mod loading;
 
 use crate::audio::InternalAudioPlugin;
-use crate::cell::CellPlugin;
+use crate::grid::GridPlugin;
 use crate::loading::LoadingPlugin;
 
 use bevy::app::App;
@@ -26,7 +27,7 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
-            .add_plugins((LoadingPlugin, InternalAudioPlugin, CellPlugin));
+            .add_plugins((LoadingPlugin, InternalAudioPlugin, GridPlugin));
 
         #[cfg(debug_assertions)]
         {
