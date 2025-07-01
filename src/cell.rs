@@ -39,46 +39,6 @@ pub struct CellData {
     pub color: [u8; 3],
 }
 
-impl CellData {
-    pub fn falls(&self) -> bool {
-        match self.material {
-            Material::Powder | Material::Solid | Material::Liquid(_) | Material::Acid => true,
-            Material::Gas | Material::Fire | Material::Wind => false,
-        }
-    }
-
-    pub fn slides(&self) -> bool {
-        match self.material {
-            Material::Powder | Material::Liquid(_) | Material::Acid => true,
-            Material::Solid | Material::Gas | Material::Fire | Material::Wind => false,
-        }
-    }
-
-    pub fn sinks_under(&self, other: Option<Cell>) -> bool {
-        match other {
-            Some(other) => match (self.material, other.id.data().material) {
-                (Material::Powder, Material::Liquid(_)) => true,
-                (Material::Solid, Material::Liquid(_)) => true,
-                (Material::Liquid(a), Material::Liquid(b)) => a > b,
-                (Material::Powder, Material::Gas) => true,
-                (Material::Solid, Material::Gas) => true,
-                (Material::Liquid(_), Material::Gas) => true,
-                _ => false,
-            },
-            None => true,
-        }
-    }
-
-    pub fn dissolves(&self, other: Option<Cell>) -> bool {
-        match (self.material, other.map(|c| c.id.data().material)) {
-            (Material::Acid, None) => false,
-            (Material::Acid, Some(Material::Acid)) => false,
-            (Material::Acid, Some(_)) => true,
-            _ => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CellId {
     Sand,
@@ -177,6 +137,62 @@ pub struct Cell {
     pub life: Option<u8>,
 }
 
+impl Cell {
+    pub fn material(&self) -> Material {
+        self.id.data().material
+    }
+
+    pub fn flammable(&self) -> bool {
+        self.id.data().flammable
+    }
+
+    pub fn lifespan(&self) -> Option<u8> {
+        self.id.data().lifespan
+    }
+
+    pub fn color(&self) -> [u8; 3] {
+        self.id.data().color
+    }
+
+    pub fn falls(&self) -> bool {
+        match self.material() {
+            Material::Powder | Material::Solid | Material::Liquid(_) | Material::Acid => true,
+            Material::Gas | Material::Fire | Material::Wind => false,
+        }
+    }
+
+    pub fn slides(&self) -> bool {
+        match self.material() {
+            Material::Powder | Material::Liquid(_) | Material::Acid => true,
+            Material::Solid | Material::Gas | Material::Fire | Material::Wind => false,
+        }
+    }
+
+    pub fn sinks_under(&self, other: Option<Cell>) -> bool {
+        match other {
+            Some(other) => match (self.material(), other.material()) {
+                (Material::Powder, Material::Liquid(_)) => true,
+                (Material::Solid, Material::Liquid(_)) => true,
+                (Material::Liquid(a), Material::Liquid(b)) => a > b,
+                (Material::Powder, Material::Gas) => true,
+                (Material::Solid, Material::Gas) => true,
+                (Material::Liquid(_), Material::Gas) => true,
+                _ => false,
+            },
+            None => true,
+        }
+    }
+
+    pub fn dissolves(&self, other: Option<Cell>) -> bool {
+        match (self.material(), other.map(|c| c.material())) {
+            (Material::Acid, None) => false,
+            (Material::Acid, Some(Material::Acid)) => false,
+            (Material::Acid, Some(_)) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct Grid {
     pub cells: Vec<Vec<Option<Cell>>>,
@@ -270,13 +286,11 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                     }
                 }
 
-                let data = cell.id.data();
-
                 if y > 0 {
                     let above = grid.cells[x][y - 1];
 
                     // Float
-                    if above.is_some() && above.unwrap().id.data().sinks_under(Some(cell)) {
+                    if above.is_some() && above.unwrap().sinks_under(Some(cell)) {
                         new_cells[x][y] = above;
                         new_cells[x][y - 1] = Some(cell);
                         continue;
@@ -284,12 +298,12 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                 }
 
                 if y < GRID_HEIGHT - 1 {
-                    if data.falls() {
+                    if cell.falls() {
                         // Fall
-                        if data.sinks_under(grid.cells[x][y + 1])
-                            || data.dissolves(grid.cells[x][y + 1])
+                        if cell.sinks_under(grid.cells[x][y + 1])
+                            || cell.dissolves(grid.cells[x][y + 1])
                         {
-                            if data.dissolves(grid.cells[x][y + 1]) {
+                            if cell.dissolves(grid.cells[x][y + 1]) {
                                 new_cells[x][y] = None;
                                 new_cells[x][y + 1] = None;
                             } else {
@@ -300,15 +314,15 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         } else {
                             match grid.cells[x][y + 1] {
                                 // Extinguish fire
-                                Some(c) if c.id.data().material == Material::Fire => {
+                                Some(c) if c.material() == Material::Fire => {
                                     new_cells[x][y] = None;
-                                    if !data.flammable {
+                                    if !cell.flammable() {
                                         new_cells[x][y + 1] = Some(cell);
                                     }
                                     continue;
                                 }
                                 // Dissolve in acid
-                                Some(c) if c.id.data().dissolves(Some(cell)) => {
+                                Some(c) if c.dissolves(Some(cell)) => {
                                     new_cells[x][y] = None;
                                     new_cells[x][y + 1] = None;
                                 }
@@ -318,16 +332,16 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                     }
 
                     // Slide down slopes
-                    if data.slides() {
+                    if cell.slides() {
                         let below_left = x > 0
-                            && (data.sinks_under(grid.cells[x - 1][y + 1])
-                                || data.dissolves(grid.cells[x - 1][y + 1]))
-                            && data.sinks_under(grid.cells[x - 1][y])
+                            && (cell.sinks_under(grid.cells[x - 1][y + 1])
+                                || cell.dissolves(grid.cells[x - 1][y + 1]))
+                            && cell.sinks_under(grid.cells[x - 1][y])
                             && grid.cells[x - 1][y + 1] == new_cells[x - 1][y + 1];
                         let below_right = x < GRID_WIDTH - 1
-                            && (data.sinks_under(grid.cells[x + 1][y + 1])
-                                || data.dissolves(grid.cells[x + 1][y + 1]))
-                            && data.sinks_under(grid.cells[x + 1][y])
+                            && (cell.sinks_under(grid.cells[x + 1][y + 1])
+                                || cell.dissolves(grid.cells[x + 1][y + 1]))
+                            && cell.sinks_under(grid.cells[x + 1][y])
                             && grid.cells[x + 1][y + 1] == new_cells[x + 1][y + 1];
 
                         let (below_left, below_right) = if below_left && below_right {
@@ -341,7 +355,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         };
 
                         if below_left {
-                            if data.dissolves(grid.cells[x - 1][y + 1]) {
+                            if cell.dissolves(grid.cells[x - 1][y + 1]) {
                                 new_cells[x][y] = None;
                                 new_cells[x - 1][y + 1] = None;
                             } else {
@@ -352,7 +366,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         }
 
                         if below_right {
-                            if data.dissolves(grid.cells[x + 1][y + 1]) {
+                            if cell.dissolves(grid.cells[x + 1][y + 1]) {
                                 new_cells[x][y] = None;
                                 new_cells[x + 1][y + 1] = None;
                             } else {
@@ -363,19 +377,19 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                         }
                     }
 
-                    match data.material {
+                    match cell.material() {
                         Material::Powder | Material::Solid => (),
                         Material::Liquid(_) | Material::Acid => {
                             // Fill gaps
 
                             let left = x > 0
-                                && (data.sinks_under(new_cells[x - 1][y])
-                                    || data.dissolves(new_cells[x - 1][y]))
-                                && (y == 0 || data.sinks_under(grid.cells[x - 1][y - 1]));
+                                && (cell.sinks_under(new_cells[x - 1][y])
+                                    || cell.dissolves(new_cells[x - 1][y]))
+                                && (y == 0 || cell.sinks_under(grid.cells[x - 1][y - 1]));
                             let right = x < GRID_WIDTH - 1
-                                && (data.sinks_under(new_cells[x + 1][y])
-                                    || data.dissolves(new_cells[x + 1][y]))
-                                && (y == 0 || data.sinks_under(grid.cells[x + 1][y - 1]));
+                                && (cell.sinks_under(new_cells[x + 1][y])
+                                    || cell.dissolves(new_cells[x + 1][y]))
+                                && (y == 0 || cell.sinks_under(grid.cells[x + 1][y - 1]));
 
                             let (left, right) = if left && right {
                                 if rng.gen() {
@@ -388,7 +402,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             };
 
                             if left {
-                                if data.dissolves(new_cells[x - 1][y]) {
+                                if cell.dissolves(new_cells[x - 1][y]) {
                                     new_cells[x][y] = None;
                                     new_cells[x - 1][y] = None;
                                 } else {
@@ -399,7 +413,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                             }
 
                             if right {
-                                if data.dissolves(new_cells[x + 1][y]) {
+                                if cell.dissolves(new_cells[x + 1][y]) {
                                     new_cells[x][y] = None;
                                     new_cells[x + 1][y] = None;
                                 } else {
@@ -435,7 +449,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 .into_iter()
                                 .filter(|&(nx, ny)| {
                                     grid.cells[nx][ny].is_some()
-                                        && grid.cells[nx][ny].unwrap().id.data().flammable
+                                        && grid.cells[nx][ny].unwrap().flammable()
                                 })
                                 .collect();
 
@@ -450,11 +464,11 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 if let Some(&(ax, ay)) = open.choose(&mut rng) {
                                     new_cells[ax][ay] = Some(Cell {
                                         id: cell.id,
-                                        life: data.lifespan,
+                                        life: cell.lifespan(),
                                     });
                                 }
 
-                                let chance = match grid.cells[nx][ny].unwrap().id.data().material {
+                                let chance = match grid.cells[nx][ny].unwrap().material() {
                                     Material::Liquid(_) => 0.55,
                                     _ => 0.1,
                                 };
@@ -462,7 +476,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
                                 if rng.gen::<f32>() < chance {
                                     new_cells[nx][ny] = Some(Cell {
                                         id: cell.id,
-                                        life: data.lifespan,
+                                        life: cell.lifespan(),
                                     });
                                 }
                             }
@@ -481,7 +495,7 @@ fn tick_grid(time: Res<Time>, mut grid: ResMut<Grid>) {
 
                             match grid.cells[new_x][new_y] {
                                 Some(c) => {
-                                    if c.id.data().flammable {
+                                    if c.flammable() {
                                         new_cells[new_x][new_y] = Some(cell);
                                     }
                                 }
@@ -602,13 +616,8 @@ fn draw_grid(
                     ],
                 ]);
 
-                let color = cell.id.data().color;
-                let c = [
-                    color[0] as f32 / 255.0,
-                    color[1] as f32 / 255.0,
-                    color[2] as f32 / 255.0,
-                    1.0,
-                ];
+                let [r, g, b] = cell.color();
+                let c = [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
                 vertex_colors.extend([c, c, c, c]);
 
                 let index = vertices.len() as u32 - 4;
